@@ -14,8 +14,9 @@
     "vscode": "^1.90.0"
   },
   "categories": [
-    "Other",
-    "Accessibility"
+    "AI",
+    "Chat",
+    "Other"
   ],
   "activationEvents": [
     "onStartupFinished"
