@@ -1,0 +1,17 @@
+{
+  "name": "read-aloud",
+  "description": "Read Claude's replies aloud \u2014 free system voices out of the box, premium voices (Speechify, ElevenLabs, OpenAI) with your own API key. Chunked playback starts speaking in seconds, even on long replies.",
+  "version": "0.3.1",
+  "author": {
+    "name": "Michael Gifford"
+  },
+  "homepage": "https://github.com/michaelpgifford/claude-read-aloud",
+  "keywords": [
+    "tts",
+    "text-to-speech",
+    "read-aloud",
+    "accessibility",
+    "audio",
+    "voice"
+  ]
+}

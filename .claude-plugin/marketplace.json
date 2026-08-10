@@ -1,0 +1,13 @@
+{
+  "name": "claude-read-aloud",
+  "owner": {
+    "name": "Michael Gifford"
+  },
+  "plugins": [
+    {
+      "name": "read-aloud",
+      "source": "./",
+      "description": "Read Claude's replies aloud — free system voices out of the box, premium voices (Speechify, ElevenLabs, OpenAI) with your own API key."
+    }
+  ]
+}

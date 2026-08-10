@@ -1,0 +1,134 @@
+{
+  "name": "claude-read-aloud-button",
+  "displayName": "Claude Read Aloud \u2014 Buttons",
+  "description": "Buttons and hotkeys for the claude-read-aloud plugin: status bar, Claude Code toolbar, right-click \"Read aloud\", and an optional in-chat composer button.",
+  "version": "0.1.0",
+  "publisher": "MichaelGifford",
+  "icon": "icon.png",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/michaelpgifford/claude-read-aloud"
+  },
+  "engines": {
+    "vscode": "^1.90.0"
+  },
+  "categories": [
+    "Other",
+    "Accessibility"
+  ],
+  "activationEvents": [
+    "onStartupFinished"
+  ],
+  "main": "./extension.js",
+  "contributes": {
+    "commands": [
+      {
+        "command": "claudeReadAloud.speak",
+        "title": "Read Claude's last reply aloud",
+        "icon": "$(unmute)"
+      },
+      {
+        "command": "claudeReadAloud.stop",
+        "title": "Stop reading aloud",
+        "icon": "$(mute)"
+      },
+      {
+        "command": "claudeReadAloud.speakSelection",
+        "title": "Read aloud"
+      },
+      {
+        "command": "claudeReadAloud.pickVoice",
+        "title": "Claude Read Aloud: Pick a voice"
+      },
+      {
+        "command": "claudeReadAloud.installComposerButton",
+        "title": "Claude Read Aloud: Install in-chat button (patches Claude Code)"
+      },
+      {
+        "command": "claudeReadAloud.removeComposerButton",
+        "title": "Claude Read Aloud: Remove in-chat button (restore originals)"
+      }
+    ],
+    "keybindings": [
+      {
+        "key": "ctrl+alt+s",
+        "mac": "cmd+alt+s",
+        "command": "claudeReadAloud.speak"
+      },
+      {
+        "key": "ctrl+alt+x",
+        "mac": "cmd+alt+x",
+        "command": "claudeReadAloud.stop"
+      }
+    ],
+    "views": {
+      "claude-sidebar": [
+        {
+          "type": "webview",
+          "id": "claudeReadAloud.panel",
+          "name": "Read Aloud",
+          "when": "claude-code:doesNotSupportSecondarySidebar"
+        }
+      ],
+      "claude-sidebar-secondary": [
+        {
+          "type": "webview",
+          "id": "claudeReadAloud.panelSecondary",
+          "name": "Read Aloud",
+          "when": "!claude-code:doesNotSupportSecondarySidebar"
+        }
+      ],
+      "claude-sessions-sidebar": [
+        {
+          "type": "webview",
+          "id": "claudeReadAloud.panelSessions",
+          "name": "Read Aloud"
+        }
+      ]
+    },
+    "menus": {
+      "webview/context": [
+        {
+          "command": "claudeReadAloud.speakSelection",
+          "when": "webviewId =~ /claudeVSCode/",
+          "group": "claudeReadAloud@1"
+        }
+      ],
+      "editor/title": [
+        {
+          "command": "claudeReadAloud.speak",
+          "when": "activeWebviewPanelViewType =~ /claude/",
+          "group": "navigation@1"
+        }
+      ],
+      "view/title": [
+        {
+          "command": "claudeReadAloud.speak",
+          "when": "view =~ /claudeVSCode/",
+          "group": "navigation@1"
+        }
+      ]
+    },
+    "configuration": {
+      "title": "Claude Read Aloud",
+      "properties": {
+        "claudeReadAloud.python": {
+          "type": "string",
+          "default": "",
+          "description": "Python interpreter to use (default: python3, or python on Windows)."
+        },
+        "claudeReadAloud.script": {
+          "type": "string",
+          "default": "",
+          "description": "Path to the plugin's speak.py. Leave empty to auto-detect the installed claude-read-aloud plugin."
+        },
+        "claudeReadAloud.composerButton": {
+          "type": "boolean",
+          "default": false,
+          "description": "Keep the in-chat composer button patched into Claude Code (re-applies automatically after Claude Code updates). Enable via the 'Install in-chat button' command, which explains what gets patched."
+        }
+      }
+    }
+  }
+}
