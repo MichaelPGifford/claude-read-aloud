@@ -7,7 +7,8 @@
     {
       "name": "read-aloud",
       "source": "./",
-      "description": "Read Claude's replies aloud — free system voices out of the box, premium voices (Speechify, ElevenLabs, OpenAI) with your own API key."
+      "description": "Read Claude's replies aloud \u2014 free system voices out of the box, premium voices (Speechify, ElevenLabs, OpenAI) with your own API key."
     }
-  ]
+  ],
+  "description": "Read Claude's replies aloud \u2014 free system and local neural voices, or premium voices with your own API key."
 }

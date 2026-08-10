@@ -1,7 +1,7 @@
 {
   "name": "read-aloud",
   "description": "Read Claude's replies aloud \u2014 free system voices out of the box, premium voices (Speechify, ElevenLabs, OpenAI) with your own API key. Chunked playback starts speaking in seconds, even on long replies.",
-  "version": "0.3.1",
+  "version": "0.4.0",
   "author": {
     "name": "Michael Gifford"
   },
