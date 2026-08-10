@@ -7,9 +7,11 @@ TTS up to Speechify / ElevenLabs / OpenAI with your own key.
 
 <img src="assets/composer-button.png" alt="Read aloud speaker button inside the chat input, beside the microphone" width="730">
 
-Reading aloud while you read along means you stop skimming past the paragraph
-that mattered. And when reading itself is the hard part — low vision, dyslexia,
-screen fatigue, eyes busy elsewhere — it makes Claude Code usable at all.
+If you work with Claude Code all day, you read all day — and at some point you
+stop absorbing and start skimming. Listening shifts the load from your eyes to
+your ears: you take in the whole answer, keep your eyes on the code it
+describes, and reply better. And when reading itself is the hard part — low
+vision, dyslexia, screen fatigue — it makes Claude Code usable at all.
 
 Free out of the box: system voices with zero setup, or one command installs
 [Kokoro], a genuinely good local neural voice — no account, no key, 54 voices.
