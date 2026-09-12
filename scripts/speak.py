@@ -262,6 +262,19 @@ def _which(*names: str) -> str | None:
     return None
 
 
+# Windows gives every console app it spawns a console window of its own, so
+# each detached run, each powershell player and the kokoro runner would flash a
+# black box on screen. CREATE_NO_WINDOW suppresses it — and is *ignored* when
+# combined with DETACHED_PROCESS, so it must replace that flag, not join it.
+CREATE_NO_WINDOW = 0x08000000
+CREATE_NEW_PROCESS_GROUP = 0x00000200
+
+
+def quiet_win() -> dict:
+    """Popen kwargs that keep Windows from flashing a console window."""
+    return {"creationflags": CREATE_NO_WINDOW} if IS_WIN else {}
+
+
 def player_cmd(wav: pathlib.Path) -> list[str]:
     if IS_MAC:
         return ["afplay", str(wav)]
@@ -346,8 +359,10 @@ def make_synth(cfg: dict):
             if _kokoro_runner is None or _kokoro_runner.poll() is not None:
                 _kokoro_runner = subprocess.Popen(
                     [str(vp), str(runner), str(model), str(voices_bin)],
-                    stdin=subprocess.PIPE, stdout=subprocess.PIPE, text=True)
-            req = {"text": text, "voice": cfg["voice"] or "am_michael",
+                    stdin=subprocess.PIPE, stdout=subprocess.PIPE, text=True,
+                    **quiet_win())
+            v = cfg["voice"] or "am_michael"
+            req = {"text": text, "voice": v, "lang": kokoro_lang(v),
                    "speed": float(cfg["speed"] or 1.0), "out": str(out)}
             _kokoro_runner.stdin.write(json.dumps(req) + "\n")
             _kokoro_runner.stdin.flush()
@@ -405,7 +420,8 @@ def speak_direct(text: str, cfg: dict) -> None:
 
     stop()
     PIDFILE.write_text(str(os.getpid()))
-    p = subprocess.Popen(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    p = subprocess.Popen(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                         **quiet_win())
     signal.signal(signal.SIGTERM, lambda *_: (p.terminate(), os._exit(0)))
     p.wait()
     PIDFILE.unlink(missing_ok=True)
@@ -432,7 +448,9 @@ k = Kokoro(sys.argv[1], sys.argv[2])
 for line in sys.stdin:
     try:
         q = json.loads(line)
-        s, r = k.create(q["text"], voice=q["voice"], speed=q["speed"], lang="en-us")
+        # Default keeps an older on-disk runner working with a newer speak.py.
+        s, r = k.create(q["text"], voice=q["voice"], speed=q["speed"],
+                        lang=q.get("lang", "en-us"))
         sf.write(q["out"], s, r)
         print("ok", flush=True)
     except Exception as e:
@@ -488,7 +506,7 @@ def setup_kokoro() -> int:
     cfg = load_config()
     if cfg["provider"] == "system":
         cfg["provider"] = "kokoro"
-        if not str(cfg["voice"]).startswith(("af_", "am_", "bf_", "bm_")):
+        if str(cfg["voice"]) not in KOKORO_VOICES:
             cfg["voice"] = "am_michael"
         save_config(cfg)
         print("\nKokoro installed — provider set to kokoro (voice am_michael).")
@@ -533,7 +551,8 @@ def play_chunked(text: str, cfg: dict, synth) -> None:
     for i in range(len(chunks)):
         cur = PARTS[i % 2]
         state["player"] = subprocess.Popen(
-            player_cmd(cur), stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            player_cmd(cur), stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+            **quiet_win())
         prefetch = None
         if i + 1 < len(chunks):
             prefetch = threading.Thread(
@@ -552,7 +571,7 @@ def detach(argv: list[str]) -> None:
     kwargs: dict = {"stdout": subprocess.DEVNULL, "stderr": subprocess.DEVNULL,
                     "stdin": subprocess.DEVNULL}
     if IS_WIN:
-        kwargs["creationflags"] = 0x00000008 | 0x00000200   # DETACHED | NEW_GROUP
+        kwargs["creationflags"] = CREATE_NO_WINDOW | CREATE_NEW_PROCESS_GROUP
     else:
         kwargs["start_new_session"] = True
     subprocess.Popen([sys.executable, os.path.abspath(__file__), *argv], **kwargs)
@@ -581,7 +600,44 @@ KOKORO_VOICES = [
     "am_liam", "am_onyx", "am_santa",
     "bf_emma", "bf_alice", "bf_isabella", "bf_lily",
     "bm_george", "bm_daniel", "bm_fable", "bm_lewis",
+    # The model ships 54 voices in 9 languages; the bundled voices bin already
+    # contains all of them, so none of these cost an extra download.
+    "ef_dora", "em_alex", "em_santa",
+    "ff_siwis",
+    "if_sara", "im_nicola",
+    "pf_dora", "pm_alex", "pm_santa",
+    "hf_alpha", "hf_beta", "hm_omega", "hm_psi",
+    "jf_alpha", "jf_gongitsune", "jf_nezumi", "jf_tebukuro", "jm_kumo",
+    "zf_xiaobei", "zf_xiaoni", "zf_xiaoxiao", "zf_xiaoyi",
+    "zm_yunjian", "zm_yunxi", "zm_yunxia", "zm_yunyang",
 ]
+
+# A voice's first letter encodes its language, and phonemization must follow the
+# voice: a Spanish voice fed English phonemes reads Spanish with an English
+# accent. Each code below was verified against a voice of that language.
+#
+# Every entry carries a display label, American English included: three voices
+# share the name "santa" and two each share "dora"/"alex"/"alpha" across
+# languages, so an unlabelled default would read as ambiguous, not merely terse.
+KOKORO_LANGS = {
+    "a": ("en-us", "American"),  "b": ("en-gb", "British"),
+    "e": ("es", "Spanish"),      "f": ("fr-fr", "French"),
+    "h": ("hi", "Hindi"),        "i": ("it", "Italian"),
+    "j": ("ja", "Japanese"),     "p": ("pt-br", "Brazilian Portuguese"),
+    "z": ("cmn", "Mandarin"),
+}
+
+
+def kokoro_lang(voice: str) -> str:
+    """espeak language code for a Kokoro voice id, by its prefix letter."""
+    return KOKORO_LANGS.get((voice or "a")[:1], ("en-us", ""))[0]
+
+
+def kokoro_label(voice: str) -> str:
+    """Display name for a Kokoro voice id: bare name plus its language."""
+    lang = KOKORO_LANGS.get(voice[0], ("", ""))[1]
+    return voice.split("_", 1)[1] + (f" ({lang})" if lang else "")
+
 
 OPENAI_VOICES = ["alloy", "ash", "coral", "echo", "fable", "nova", "onyx",
                  "sage", "shimmer"]
@@ -593,8 +649,7 @@ def list_voices(cfg: dict) -> int:
     voices: list[dict] = []
 
     if provider == "kokoro":
-        voices = [{"id": v, "label": v.split("_", 1)[1] + (
-            " (British)" if v[0] == "b" else "")} for v in KOKORO_VOICES]
+        voices = [{"id": v, "label": kokoro_label(v)} for v in KOKORO_VOICES]
     elif provider == "openai":
         voices = [{"id": v, "label": v} for v in OPENAI_VOICES]
     elif provider == "speechify":
