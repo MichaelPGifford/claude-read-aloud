@@ -10,11 +10,16 @@ const os = require('os');
 // spawn processes. This extension therefore hosts a tiny localhost server.
 // The port is fixed because the patched CSP names it literally.
 const PORT = 48777;
-const MARKER = 'claude-read-aloud composer';
+const MARKER = 'claude-read-aloud composer v2';
+// The one place that says whether a reading is in progress. speak.py claims
+// this file when a run starts and drops it when the audio ends — whichever
+// entry point started it: this button, the hotkey, a slash command, the hook.
+const PIDFILE = path.join(os.tmpdir(), 'claude-read-aloud.pid');
 
 let playing = false;
 let status;
 let server = null;
+let child = null;
 let selection = { text: '', at: 0 };
 
 // ---------------------------------------------------------------- speak plumbing
@@ -92,6 +97,32 @@ function run(args, { stdinText, onExit } = {}) {
     }
     if (onExit) onExit(code);
   });
+  return p;
+}
+
+function isPlaying() {
+  // Our own reader counts even before it has claimed the pidfile — the first
+  // seconds of a run go on loading a voice, and a click lands in them.
+  if (child && child.exitCode === null && !child.killed) return true;
+  try {
+    const pid = parseInt(fs.readFileSync(PIDFILE, 'utf8').trim(), 10);
+    if (!pid) return false;
+    process.kill(pid, 0);                 // signal 0 only asks: still alive?
+    return true;
+  } catch { return false; }               // no file, or it died mid-reading
+}
+
+function stopNow() {
+  // Kill our own reader by handle, not through the pidfile: a reader still
+  // starting up has not claimed the file yet, and a stop that only reads the
+  // file would miss it and leave two voices running over each other.
+  if (child && child.exitCode === null) { try { child.kill('SIGTERM'); } catch { /* gone */ } }
+  child = null;
+  try {
+    const pid = parseInt(fs.readFileSync(PIDFILE, 'utf8').trim(), 10);
+    if (pid) process.kill(pid, 'SIGTERM');
+    fs.unlinkSync(PIDFILE);
+  } catch { /* nothing was reading */ }
 }
 
 function projectArgs() {
@@ -99,21 +130,34 @@ function projectArgs() {
   return ws && ws.length ? ['--project', ws[0].uri.fsPath] : [];
 }
 
-function speakTranscript() {
+// Every reading goes through here: stop what is playing, then start. A new
+// reading always REPLACES the old one — two readings at once are unlistenable,
+// and asking for one is the plainest way a person says "stop that".
+function speakWith(args, stdinText) {
+  stopNow();
   setPlaying(true);
   status.text = '$(loading~spin) Reading…';
-  // speak.py exits when playback finishes, so exit = time to reset the button.
-  run(projectArgs(), { onExit: () => setPlaying(false) });
+  let mine;
+  mine = run(args, {
+    stdinText,
+    // Only the reading that is still current may reset the button: a reader we
+    // just killed exits a moment later, and its exit is not the end of reading.
+    onExit: () => { if (child === mine) { child = null; setPlaying(false); } },
+  });
+  child = mine;
+}
+
+function speakTranscript() {
+  speakWith(projectArgs());
 }
 
 function speakText(text) {
-  setPlaying(true);
-  status.text = '$(loading~spin) Reading…';
-  run(['--stdin'], { stdinText: text, onExit: () => setPlaying(false) });
+  speakWith(['--stdin'], text);
 }
 
 function stop() {
-  run(['--stop'], { onExit: () => setPlaying(false) });
+  stopNow();
+  setPlaying(false);
 }
 
 function runCapture(args) {
@@ -189,6 +233,11 @@ function ensureServer() {
     req.on('data', c => { size += c.length; if (size <= 60_000) body.push(c); });
     req.on('end', () => {
       const text = Buffer.concat(body).toString('utf8').trim();
+      if (route === '/status') {
+        res.writeHead(200, { ...cors, 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ playing: isPlaying() }));
+        return;
+      }
       if (route === '/speak' && req.method === 'POST' && text) speakText(text);
       else if (route === '/speak') speakTranscript();
       else if (route === '/stop') stop();
@@ -203,7 +252,12 @@ function ensureServer() {
     });
   });
   server.on('error', e => {
-    vscode.window.showWarningMessage(`Read aloud server: ${e.message}`);
+    // A second VS Code window finds the port taken by the first. That window
+    // hosts the reading for both, and every click carries its own text, so
+    // standing down quietly costs nothing — a popup per window would not.
+    if (e.code !== 'EADDRINUSE') {
+      vscode.window.showWarningMessage(`Read aloud server: ${e.message}`);
+    }
     server = null;
   });
   server.listen(PORT, '127.0.0.1');

@@ -2,7 +2,7 @@
   "name": "claude-read-aloud-button",
   "displayName": "Claude Read Aloud \u2014 Buttons",
   "description": "Buttons and hotkeys for the claude-read-aloud plugin: status bar, Claude Code toolbar, right-click \"Read aloud\", and an optional in-chat composer button.",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "publisher": "MichaelGifford",
   "icon": "icon.png",
   "license": "MIT",

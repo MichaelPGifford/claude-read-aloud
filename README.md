@@ -146,8 +146,10 @@ The two triggers that actually feel native — and, in daily use, the ones you
 end up reaching for:
 
 - **A speaker button inside the chat box, right next to the mic.** Click it and
-  it reads the reply you're looking at (it reads the *visible* conversation, so
-  it can't pick the wrong session). Highlight text first and it reads just that.
+  it reads the reply you're looking at — the visible conversation in that pane,
+  never another tab's and never a transcript from somewhere else. Highlight
+  text first and it reads *that*, cutting off whatever was playing: a new
+  reading always replaces the old, because two at once are unlistenable.
 - **Highlight any text in the chat → right-click → "Read aloud"** in the same
   menu as copy/paste.
 

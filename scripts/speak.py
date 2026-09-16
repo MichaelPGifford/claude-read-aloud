@@ -44,6 +44,7 @@ import struct
 import subprocess
 import sys
 import tempfile
+import time
 import threading
 import urllib.request
 import wave
@@ -53,8 +54,13 @@ import wave
 HOME = pathlib.Path.home()
 PROJECTS = HOME / ".claude" / "projects"
 PIDFILE = pathlib.Path(tempfile.gettempdir()) / "claude-read-aloud.pid"
-PARTS = [pathlib.Path(tempfile.gettempdir()) / f"claude-read-aloud-{i}.wav"
+# Scratch audio is named per process. Two readings overlap for a moment by
+# design — the one being stopped is still winding down while its replacement
+# synthesises — and one shared pair of filenames means the dying player reads
+# a file the new one is rewriting. That is heard as garble, not as a handover.
+PARTS = [pathlib.Path(tempfile.gettempdir()) / f"claude-read-aloud-{os.getpid()}-{i}.wav"
          for i in (0, 1)]
+PART_GLOB = "claude-read-aloud-*-[01].wav"
 
 IS_MAC = sys.platform == "darwin"
 IS_WIN = os.name == "nt"
@@ -418,13 +424,12 @@ def speak_direct(text: str, cfg: dict) -> None:
             cmd += ["-r", str(max(-100, min(100, int((speed - 1.0) * 100))))]
         cmd.append(text)
 
-    stop()
-    PIDFILE.write_text(str(os.getpid()))
-    p = subprocess.Popen(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
-                         **quiet_win())
-    signal.signal(signal.SIGTERM, lambda *_: (p.terminate(), os._exit(0)))
-    p.wait()
-    PIDFILE.unlink(missing_ok=True)
+    global _player
+    claim()
+    _player = subprocess.Popen(cmd, stdout=subprocess.DEVNULL,
+                               stderr=subprocess.DEVNULL, **quiet_win())
+    _player.wait()
+    release()
 
 # ------------------------------------------------------------------ kokoro (local)
 
@@ -520,37 +525,85 @@ def setup_kokoro() -> int:
 # ----------------------------------------------------------------------- playback
 
 
+_player: subprocess.Popen | None = None
+
+
 def stop() -> None:
-    if PIDFILE.exists():
-        try:
-            os.kill(int(PIDFILE.read_text().strip()), signal.SIGTERM)
-        except (OSError, ValueError):
-            pass
+    """Stop whoever holds the reading. Never this process — see claim()."""
+    if not PIDFILE.exists():
+        return
+    try:
+        pid = int(PIDFILE.read_text().strip())
+    except (OSError, ValueError):
         PIDFILE.unlink(missing_ok=True)
+        return
+    if pid == os.getpid():
+        return
+    try:
+        os.kill(pid, signal.SIGTERM)
+    except OSError:
+        pass                                     # already gone, or not ours
+    PIDFILE.unlink(missing_ok=True)
+
+
+def claim() -> None:
+    """Become the one reader: stop the current reading, then take the pidfile.
+
+    Claimed when a run STARTS, not when its audio does. A reading spends its
+    first seconds loading a model or waiting on an API, and a second click
+    landing in that window used to find an empty pidfile, stop nothing, and
+    leave two voices talking over each other.
+    """
+    stop()
+    PIDFILE.write_text(str(os.getpid()))
+    signal.signal(signal.SIGTERM, _on_term)
+    _sweep_parts()
+
+
+def release() -> None:
+    """Hand back the pidfile if it is still ours, and take our audio with us."""
+    try:
+        if PIDFILE.read_text().strip() == str(os.getpid()):
+            PIDFILE.unlink(missing_ok=True)
+    except (OSError, ValueError):
+        pass
+    for part in PARTS:
+        try:
+            part.unlink(missing_ok=True)
+        except OSError:
+            pass
+
+
+def _on_term(_sig=None, _frm=None):
+    if _player and _player.poll() is None:
+        _player.terminate()
+    if _kokoro_runner and _kokoro_runner.poll() is None:
+        _kokoro_runner.terminate()
+    release()
+    os._exit(0)
+
+
+def _sweep_parts() -> None:
+    """Bin scratch audio a crashed reading left behind — an hour is long past."""
+    cutoff = time.time() - 3600
+    try:
+        for part in pathlib.Path(tempfile.gettempdir()).glob(PART_GLOB):
+            if part.stat().st_mtime < cutoff:
+                part.unlink(missing_ok=True)
+    except OSError:
+        pass
 
 
 def play_chunked(text: str, cfg: dict, synth) -> None:
     """Gapless chunked playback: synthesise chunk i+1 while chunk i plays."""
-    stop()                                       # never overlap two readings
-    PIDFILE.write_text(str(os.getpid()))
-
-    state: dict = {"player": None}
-
-    def on_term(_sig, _frm):
-        p = state["player"]
-        if p and p.poll() is None:
-            p.terminate()
-        if _kokoro_runner and _kokoro_runner.poll() is None:
-            _kokoro_runner.terminate()
-        PIDFILE.unlink(missing_ok=True)
-        os._exit(0)
-    signal.signal(signal.SIGTERM, on_term)
+    global _player
+    claim()                                      # never overlap two readings
 
     chunks = chunk_text(text, int(cfg["first_chars"]), int(cfg["chunk_chars"]))
     synth(chunks[0], PARTS[0])
     for i in range(len(chunks)):
         cur = PARTS[i % 2]
-        state["player"] = subprocess.Popen(
+        _player = subprocess.Popen(
             player_cmd(cur), stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
             **quiet_win())
         prefetch = None
@@ -558,10 +611,10 @@ def play_chunked(text: str, cfg: dict, synth) -> None:
             prefetch = threading.Thread(
                 target=synth, args=(chunks[i + 1], PARTS[(i + 1) % 2]), daemon=True)
             prefetch.start()
-        state["player"].wait()
+        _player.wait()
         if prefetch:
             prefetch.join()
-    PIDFILE.unlink(missing_ok=True)
+    release()
 
 # --------------------------------------------------------------------------- modes
 
@@ -844,6 +897,9 @@ def main() -> int:
         print(text)
         return 0
 
+    # Claimed before the engine is built, not after: loading a 300MB model or
+    # waiting on a cloud voice is exactly the window a second click lands in.
+    claim()
     synth = make_synth(cfg)
     if synth is None:
         speak_direct(text, cfg)

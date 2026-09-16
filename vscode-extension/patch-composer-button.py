@@ -36,7 +36,11 @@ import sys
 
 PORT = 48777
 SERVER = f"http://127.0.0.1:{PORT}"
-MARKER = "/* claude-read-aloud composer v1 */"
+MARKER = "/* claude-read-aloud composer v2 */"
+# Any version of our own injection. The version in MARKER is what tells an
+# upgrade that the button in the file is the OLD one and has to go: appending a
+# second would leave two buttons, each with its own idea of what is playing.
+MARKER_ANY = "/* claude-read-aloud composer"
 FOREIGN = "/* claude-tts-button"        # a different local patch of the same files
 BACKUP_SUFFIX = ".cra-orig"
 
@@ -50,6 +54,7 @@ INJECTION = MARKER + """
     ' stroke="currentColor" stroke-width="2" stroke-linecap="round"' +
     ' stroke-linejoin="round"><path d="M11 5 6 9H2v6h4l5 4V5z"/>' +
     '<path d="M15.5 8.5a5 5 0 0 1 0 7"/><path d="M19 5a9 9 0 0 1 0 14"/></svg>';
+  var IDLE = "Read aloud \u2014 highlighted text if any, else Claude's last reply";
 
   function findMics() {
     // Claude Code has more than one composer (the main chat box and the
@@ -62,21 +67,112 @@ INJECTION = MARKER + """
   }
 
   function selectedText() {
-    try { return String(window.getSelection() || '').trim(); } catch (e) { return ''; }
+    try {
+      var sel = window.getSelection();
+      if (!sel || sel.isCollapsed) return '';
+      return String(sel).trim();
+    } catch (e) { return ''; }
   }
 
-  function lastReplyText() {
-    var nodes = document.querySelectorAll('[data-testid="assistant-message"]');
-    if (!nodes.length) return '';
-    return (nodes[nodes.length - 1].innerText || '').trim();
+  // The last reply in ONE pane: the newest message that is actually on screen
+  // and has words in it. A reply still streaming is empty, and a pane scrolled
+  // out of view is not what anyone means by "read this".
+  function replyIn(root) {
+    var nodes = root.querySelectorAll('[data-testid="assistant-message"]');
+    for (var i = nodes.length - 1; i >= 0; i--) {
+      if (!nodes[i].getClientRects().length) continue;
+      var t = (nodes[i].innerText || '').trim();
+      if (t) return t;
+    }
+    return '';
+  }
+
+  // …and the pane is THIS button's own: walk out from the button until an
+  // ancestor holds a reply. One window holds more than one conversation, and a
+  // document-wide query reads whichever message sits last in the DOM — which is
+  // how a click in one place used to read something from another.
+  function lastReplyText(btn) {
+    for (var n = btn.parentElement; n && n !== document.body; n = n.parentElement) {
+      var found = replyIn(n);
+      if (found) return found;
+    }
+    return replyIn(document.body);
+  }
+
+  function paint(b, on) {
+    b.dataset.on = on ? '1' : '0';
+    b.style.opacity = on ? '0.55' : '';
+    b.title = on ? 'Stop reading' : IDLE;
+    b.setAttribute('aria-label', on ? 'Stop reading aloud' : IDLE);
+  }
+
+  function ask(route, body) {
+    var opts = { mode: 'cors' };
+    if (body !== undefined) { opts.method = 'POST'; opts.body = body; }
+    return fetch(SERVER + route, opts);
+  }
+
+  function playing() {
+    return ask('/status').then(function (r) { return r.json(); })
+      .then(function (j) { return !!j.playing; });
+  }
+
+  // While a reading runs the button follows the server, not a timer. The old
+  // button guessed with a three-minute timeout, so its idea of "reading" and
+  // the machine's parted company, and the next click did the wrong one of the
+  // two things it could do.
+  function watch(b) {
+    if (b.craWatch) return;
+    b.craWatch = setInterval(function () {
+      var done = function () { clearInterval(b.craWatch); b.craWatch = null; };
+      if (!b.isConnected) { done(); return; }   // React replaced it mid-reading
+      playing().then(function (on) {
+        if (on) return;
+        done(); paint(b, false);
+      }).catch(function () { done(); paint(b, false); });
+    }, 1000);
+  }
+
+  function unreachable(b) {
+    paint(b, false);
+    b.title = 'Read-aloud is not listening — is the claude-read-aloud-button ' +
+      'extension installed, with its composerButton setting on?';
+  }
+
+  function speak(b, text) {
+    paint(b, true);
+    watch(b);
+    ask('/speak', text).catch(function () { unreachable(b); });
+  }
+
+  function click(b) {
+    var highlighted = selectedText();
+    if (highlighted) {
+      // A highlight always wins, and always interrupts: the server stops the
+      // current reading before starting this one. Never a toggle — someone who
+      // highlights a paragraph and presses play is asking for THAT, now.
+      speak(b, highlighted);
+      return;
+    }
+    playing().then(function (on) {
+      if (on) { paint(b, false); ask('/stop').catch(function () {}); return; }
+      var reply = lastReplyText(b);
+      if (!reply) {
+        // Nothing here to read. The old button fell back to "the newest
+        // transcript on this machine", which on a busy one is another
+        // project's session — a stranger's words out of nowhere.
+        b.title = 'Nothing to read in this conversation yet.';
+        return;
+      }
+      speak(b, reply);
+    }).catch(function () { unreachable(b); });
   }
 
   // Right-click: stash the selection so the extension's context-menu item
   // ("Read aloud") can ask its server to speak it. Fire-and-forget.
   document.addEventListener('contextmenu', function () {
     var s = selectedText();
-    if (s) fetch(SERVER + '/selection', { method: 'POST', mode: 'cors', body: s })
-      .catch(function () {});
+    if (s) ask('/selection', s).catch(function () {});
   }, true);
 
   function ensure() {
@@ -99,10 +195,8 @@ INJECTION = MARKER + """
     b.type = 'button';
     // Inherit the mic's own classes so it matches whatever the theme does.
     b.className = mic.className + ' cra-btn';
-    b.setAttribute('aria-label', "Read aloud (selection, or Claude's last reply)");
-    b.title = "Read aloud — highlighted text if any, else Claude's last reply";
     b.innerHTML = ICON;
-    b.dataset.on = '0';
+    paint(b, false);
 
     // The composer focuses its textbox on mousedown; swallow it so clicking
     // this button neither steals the caret NOR collapses the selection.
@@ -113,26 +207,14 @@ INJECTION = MARKER + """
     b.addEventListener('click', function (e) {
       e.preventDefault();
       e.stopPropagation();
-      var on = b.dataset.on !== '1';
-      b.dataset.on = on ? '1' : '0';
-      b.style.opacity = on ? '0.55' : '';
-      var done = function () { b.dataset.on = '0'; b.style.opacity = ''; };
-      var fail = function () {
-        done();
-        b.title = 'Read-aloud server is not running — is the ' +
-          'claude-read-aloud-button extension installed and its ' +
-          'composerButton setting on?';
-      };
-      if (!on) { fetch(SERVER + '/stop', { mode: 'cors' }).catch(fail); return; }
-      var text = selectedText() || lastReplyText();
-      var req = text
-        ? fetch(SERVER + '/speak', { method: 'POST', mode: 'cors', body: text })
-        : fetch(SERVER + '/speak', { mode: 'cors' });   // transcript fallback
-      req.catch(fail);
-      setTimeout(done, 1000 * 600);
+      click(b);
     });
 
     wrap.insertBefore(b, mic);
+    // React rebuilds this button constantly, including in the middle of a
+    // reading. Ask the machine what is true rather than starting from idle.
+    playing().then(function (on) { if (on) { paint(b, true); watch(b); } })
+      .catch(function () {});
   }
 
   // React re-renders the composer constantly, so re-add on every mutation.
@@ -179,7 +261,9 @@ def status(ext: pathlib.Path) -> int:
     wv = (ext / "webview/index.js").read_text(encoding="utf-8", errors="replace")
     ej = (ext / "extension.js").read_text(encoding="utf-8", errors="replace")
     print(f"extension : {ext}")
-    print(f"  button injected : {'yes' if MARKER in wv else 'NO'}")
+    injected = ("yes" if MARKER in wv
+                else "an older version — re-apply" if MARKER_ANY in wv else "NO")
+    print(f"  button injected : {injected}")
     print(f"  csp widened     : {'yes' if SERVER in ej else 'NO'}")
     if FOREIGN in wv or FOREIGN in ej:
         print("  WARNING: a different patch of these files is present "
@@ -217,6 +301,15 @@ def apply(ext: pathlib.Path) -> None:
     if MARKER in wv:
         print("  webview : already injected")
     else:
+        b = wv_path.with_suffix(wv_path.suffix + BACKUP_SUFFIX)
+        if MARKER_ANY in wv:
+            # Start from the pristine file rather than cutting the old block
+            # out of 5MB of minified code by hand.
+            if not b.exists():
+                sys.exit("  webview : an older button is injected but its backup is "
+                         "gone — reinstall Claude Code, then run this again.")
+            wv = b.read_text(encoding="utf-8", errors="replace")
+            print("  webview : older button removed")
         backup(wv_path)
         wv_path.write_text(wv.rstrip() + "\n;" + INJECTION, encoding="utf-8")
         print("  webview : button injected")
