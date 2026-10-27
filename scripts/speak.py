@@ -281,11 +281,22 @@ def quiet_win() -> dict:
     return {"creationflags": CREATE_NO_WINDOW} if IS_WIN else {}
 
 
+def ps_quote(s: str) -> str:
+    """Escape *s* for a single-quoted PowerShell string.
+
+    PowerShell treats the typographic quotes U+2018, U+2019, U+201A and U+201B
+    as single quotes too, so escaping only the ASCII one lets text such as
+    "it’s" end the string early and run what follows as a command.
+    Doubling any of them is the escape for each.
+    """
+    return re.sub("['‘’‚‛]", lambda m: m.group(0) * 2, s)
+
+
 def player_cmd(wav: pathlib.Path) -> list[str]:
     if IS_MAC:
         return ["afplay", str(wav)]
     if IS_WIN:
-        path = str(wav).replace("'", "''")
+        path = ps_quote(str(wav))
         return ["powershell", "-NoProfile", "-Command",
                 f"(New-Object Media.SoundPlayer '{path}').PlaySync()"]
     p = _which("aplay", "paplay", "ffplay")
@@ -406,9 +417,9 @@ def speak_direct(text: str, cfg: dict) -> None:
             cmd += ["-r", str(int(190 * speed))]
         cmd.append(text)
     elif IS_WIN:
-        esc = text.replace("'", "''")
+        esc = ps_quote(text)
         rate = max(-10, min(10, int((speed - 1.0) * 10)))
-        sel = (f"$s.SelectVoice('{cfg['voice']}');" if cfg["voice"] else "")
+        sel = (f"$s.SelectVoice('{ps_quote(str(cfg['voice']))}');" if cfg["voice"] else "")
         cmd = ["powershell", "-NoProfile", "-Command",
                "Add-Type -AssemblyName System.Speech;"
                "$s = New-Object System.Speech.Synthesis.SpeechSynthesizer;"
