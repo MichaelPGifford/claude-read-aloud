@@ -91,6 +91,7 @@ DEFAULTS = {
     "chunk_chars": 1800,    # per-request size, under every provider's limit
     "first_chars": 260,     # first chunk is tiny: its size is the latency
     "model": "",            # openai only; default tts-1
+    "instructions": "",     # openai gpt-4o-mini-tts only; tone/style prompt
     "command": "",          # custom engine: template with {text} and/or {out}
     "api_keys": {},         # optional; env vars take precedence
 }
@@ -347,7 +348,9 @@ def make_synth(cfg: dict):
                 {"model": cfg["model"] or "tts-1",
                  "voice": cfg["voice"] or "alloy",
                  "input": text, "response_format": "wav",
-                 "speed": cfg["speed"] or 1.0},
+                 "speed": cfg["speed"] or 1.0,
+                 **({"instructions": cfg["instructions"]}
+                    if cfg.get("instructions") else {})},
                 {"Authorization": f"Bearer {key}"})
             out.write_bytes(fix_riff_sizes(audio))
         return synth

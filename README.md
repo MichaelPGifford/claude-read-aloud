@@ -92,6 +92,19 @@ Config lives at `~/.config/claude-read-aloud/config.json`
 cloud providers list voices in their consoles). API keys go in environment
 variables, never in the file.
 
+With OpenAI's `gpt-4o-mini-tts` model, `instructions` steers the delivery in
+plain words (language, accent, tone, pace). `tts-1` does not accept it, so
+leave it empty there:
+
+```json
+{
+  "provider": "openai",
+  "model": "gpt-4o-mini-tts",
+  "voice": "marin",
+  "instructions": "Speak Brazilian Portuguese, warm and relaxed, at a brisk pace."
+}
+```
+
 A local neural engine plugs in through `command` — `{text}` is replaced with
 the text to speak; add `{out}` if your engine writes a WAV for the plugin to
 play (that's what enables gapless chunking):
