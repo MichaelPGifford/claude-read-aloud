@@ -594,13 +594,53 @@ def _sweep_parts() -> None:
         pass
 
 
+LOG_MAX_BYTES = 512 * 1024                      # then one .1 generation is kept
+
+
+def log_path() -> pathlib.Path:
+    return data_dir() / "read-aloud.log"
+
+
+def log_event(msg: str) -> None:
+    """Append one line to the log. Detached runs have no stderr to show it."""
+    try:
+        data_dir().mkdir(parents=True, exist_ok=True)
+        p = log_path()
+        if p.exists() and p.stat().st_size > LOG_MAX_BYTES:
+            os.replace(p, p.with_suffix(".log.1"))
+        with p.open("a") as f:
+            f.write(f"{time.strftime('%Y-%m-%d %H:%M:%S')} pid={os.getpid()} {msg}\n")
+    except OSError:
+        pass
+
+
+def logged_synth(synth, idx: int, total: int):
+    """Wrap synth so a failed or slow chunk leaves a trace instead of silence."""
+    def run(text: str, out: pathlib.Path) -> None:
+        t0 = time.time()
+        try:
+            synth(text, out)
+        except Exception as e:                    # noqa: BLE001 — log, then let it fail
+            log_event(f"chunk {idx + 1}/{total} ({len(text)} chars) FAILED after "
+                      f"{time.time() - t0:.1f}s: {e!r} | text: {text[:60]!r}")
+            raise
+        # Every chunk, not only slow ones: chunk 1's time IS the wait before
+        # the first sound, which is the number worth watching.
+        dt = time.time() - t0
+        log_event(f"chunk {idx + 1}/{total} ({len(text)} chars) ok {dt:.1f}s"
+                  + (" SLOW" if dt > 20 else ""))
+    return run
+
+
 def play_chunked(text: str, cfg: dict, synth) -> None:
     """Gapless chunked playback: synthesise chunk i+1 while chunk i plays."""
     global _player
     claim()                                      # never overlap two readings
 
     chunks = chunk_text(text, int(cfg["first_chars"]), int(cfg["chunk_chars"]))
-    synth(chunks[0], PARTS[0])
+    log_event(f"start provider={cfg['provider']} model={cfg.get('model') or '-'} "
+              f"chunks={len(chunks)} chars={len(text)}")
+    logged_synth(synth, 0, len(chunks))(chunks[0], PARTS[0])
     for i in range(len(chunks)):
         cur = PARTS[i % 2]
         _player = subprocess.Popen(
@@ -609,11 +649,13 @@ def play_chunked(text: str, cfg: dict, synth) -> None:
         prefetch = None
         if i + 1 < len(chunks):
             prefetch = threading.Thread(
-                target=synth, args=(chunks[i + 1], PARTS[(i + 1) % 2]), daemon=True)
+                target=logged_synth(synth, i + 1, len(chunks)),
+                args=(chunks[i + 1], PARTS[(i + 1) % 2]), daemon=True)
             prefetch.start()
         _player.wait()
         if prefetch:
             prefetch.join()
+    log_event("done")
     release()
 
 # --------------------------------------------------------------------------- modes
@@ -621,7 +663,13 @@ def play_chunked(text: str, cfg: dict, synth) -> None:
 
 def detach(argv: list[str]) -> None:
     """Re-launch this script detached so the caller returns immediately."""
-    kwargs: dict = {"stdout": subprocess.DEVNULL, "stderr": subprocess.DEVNULL,
+    # stderr goes to the log: tracebacks of a detached run are otherwise lost.
+    try:
+        data_dir().mkdir(parents=True, exist_ok=True)
+        err = log_path().open("a")
+    except OSError:
+        err = subprocess.DEVNULL
+    kwargs: dict = {"stdout": subprocess.DEVNULL, "stderr": err,
                     "stdin": subprocess.DEVNULL}
     if IS_WIN:
         kwargs["creationflags"] = CREATE_NO_WINDOW | CREATE_NEW_PROCESS_GROUP

@@ -111,6 +111,11 @@ play (that's what enables gapless chunking):
 - **Replies cap at 12,000 characters** (~14 minutes) and say so when cut.
   Code blocks are spoken as "code omitted" — nobody wants JSON read aloud.
 - **Stop always works mid-sentence**: `/speak-stop`, or the button/hotkey below.
+- **Voice stopped partway, or never started?** Each reading is logged to
+  `~/.local/share/claude-read-aloud/read-aloud.log` (`%LOCALAPPDATA%` on
+  Windows): how long every chunk took to synthesise, and any error. A reading
+  with no `done` line stalled; a slow first chunk is the wait before the first
+  sound.
 - Speechify's WAV arrives with broken (streaming) header sizes; the plugin
   repairs them — if you ever hear a burst of static with another tool, that's
   what it was.
