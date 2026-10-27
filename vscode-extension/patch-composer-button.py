@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """OPTIONAL, EXPERIMENTAL: put a Read-aloud button inside Claude Code's chat
-input, beside the mic — and capture right-click selections for "Read aloud".
+input, beside the mic, and a small speaker on each of Claude's text replies
+(shown on hover) — and capture right-click selections for "Read aloud".
 
 This EDITS TWO FILES of the installed Claude Code VS Code extension. Originals
 are backed up beside each file (*.cra-orig) and `--revert` restores them
@@ -36,7 +37,7 @@ import sys
 
 PORT = 48777
 SERVER = f"http://127.0.0.1:{PORT}"
-MARKER = "/* claude-read-aloud composer v2 */"
+MARKER = "/* claude-read-aloud composer v3 */"
 # Any version of our own injection. The version in MARKER is what tells an
 # upgrade that the button in the file is the OLD one and has to go: appending a
 # second would leave two buttons, each with its own idea of what is playing.
@@ -100,10 +101,11 @@ INJECTION = MARKER + """
   }
 
   function paint(b, on) {
+    var idle = b.craIdle || IDLE;
     b.dataset.on = on ? '1' : '0';
-    b.style.opacity = on ? '0.55' : '';
-    b.title = on ? 'Stop reading' : IDLE;
-    b.setAttribute('aria-label', on ? 'Stop reading aloud' : IDLE);
+    if (!b.craMsg) b.style.opacity = on ? '0.55' : '';
+    b.title = on ? 'Stop reading' : idle;
+    b.setAttribute('aria-label', on ? 'Stop reading aloud' : idle);
   }
 
   function ask(route, body) {
@@ -139,7 +141,13 @@ INJECTION = MARKER + """
       'extension installed, with its composerButton setting on?';
   }
 
+  // The button of the reading in progress. A new reading cuts off the old one
+  // on the server, so the old button has to let go of its "playing" look too.
+  var active = null;
+
   function speak(b, text) {
+    if (active && active !== b) paint(active, false);
+    active = b;
     paint(b, true);
     watch(b);
     ask('/speak', text).catch(function () { unreachable(b); });
@@ -175,8 +183,84 @@ INJECTION = MARKER + """
     if (s) ask('/selection', s).catch(function () {});
   }, true);
 
+  // ---- per-message button: a speaker on each of Claude's text replies ----
+
+  // A text reply is labelled exactly "Claude"; a tool call is "Claude, Bash"
+  // and friends, which are not worth hearing.
+  var MSG_SEL = '[data-testid="assistant-message"][aria-label="Claude"]';
+  var MSG_IDLE = 'Read this message aloud';
+  // Parts of a message that are chrome, not words: timestamp, thumbs, us.
+  var MSG_SKIP = '[data-message-stamp],[data-message-rating],.cra-msg-btn';
+
+  function messageText(msg) {
+    var text = msg.innerText || '';
+    msg.querySelectorAll(MSG_SKIP).forEach(function (n) {
+      var t = (n.innerText || '').trim();
+      if (t) text = text.replace(t, '');
+    });
+    return text.trim();
+  }
+
+  function ensureStyle() {
+    if (document.getElementById('cra-msg-style')) return;
+    var s = document.createElement('style');
+    s.id = 'cra-msg-style';
+    s.textContent =
+      // At the start of the message. Timeline messages keep a 30px gutter for
+      // their status dot, level with the first line: the button takes the
+      // dot's place there, so it covers neither the text nor the timestamp
+      // (which sits top-right). Without a gutter it falls back to top-left.
+      '.cra-msg-btn{position:absolute;top:0;left:0;z-index:5;display:flex;' +
+      'align-items:center;justify-content:center;width:22px;height:22px;padding:0;' +
+      'border:none;border-radius:4px;background:var(--vscode-editor-background);' +
+      'color:var(--vscode-descriptionForeground);cursor:pointer;opacity:0;' +
+      'transition:opacity .15s}' +
+      '.cra-msg-btn.cra-gutter{top:var(--message-padding-top,8px);left:2px}' +
+      '[data-testid="assistant-message"]:hover>.cra-msg-btn,' +
+      '.cra-msg-btn:focus-visible{opacity:.8}' +
+      '.cra-msg-btn:hover{opacity:1;color:var(--vscode-foreground);' +
+      'background:var(--vscode-toolbar-hoverBackground)}' +
+      '.cra-msg-btn[data-on="1"]{opacity:1;color:var(--vscode-focusBorder)}';
+    (document.head || document.documentElement).appendChild(s);
+  }
+
+  function clickMessage(b, msg) {
+    if (b.dataset.on === '1') {
+      paint(b, false);
+      ask('/stop').catch(function () {});
+      return;
+    }
+    // Read at click time, not at insert time: a reply grows while it streams.
+    var text = messageText(msg);
+    if (!text) { b.title = 'Nothing to read in this message.'; return; }
+    speak(b, text);
+  }
+
+  function ensureMessage(msg) {
+    if (msg.querySelector(':scope > .cra-msg-btn')) return;
+    var cs = getComputedStyle(msg);
+    if (cs.position === 'static') msg.style.position = 'relative';
+
+    var b = document.createElement('button');
+    b.type = 'button';
+    b.className = 'cra-msg-btn' + (parseFloat(cs.paddingLeft) >= 24 ? ' cra-gutter' : '');
+    b.craMsg = true;
+    b.craIdle = MSG_IDLE;
+    b.innerHTML = ICON;
+    paint(b, false);
+    b.addEventListener('mousedown', function (e) { e.stopPropagation(); });
+    b.addEventListener('click', function (e) {
+      e.preventDefault();
+      e.stopPropagation();
+      clickMessage(b, msg);
+    });
+    msg.appendChild(b);
+  }
+
   function ensure() {
     findMics().forEach(ensureOne);
+    ensureStyle();
+    document.querySelectorAll(MSG_SEL).forEach(ensureMessage);
   }
 
   function ensureOne(mic) {
@@ -219,7 +303,16 @@ INJECTION = MARKER + """
 
   // React re-renders the composer constantly, so re-add on every mutation.
   function start() {
-    try { new MutationObserver(ensure).observe(document.body, { childList: true, subtree: true }); } catch (e) {}
+    // A streaming reply mutates the DOM hundreds of times a second; one pass
+    // per frame is plenty, and keeps a long transcript from being re-scanned
+    // on every token.
+    var queued = false;
+    var onMutate = function () {
+      if (queued) return;
+      queued = true;
+      requestAnimationFrame(function () { queued = false; ensure(); });
+    };
+    try { new MutationObserver(onMutate).observe(document.body, { childList: true, subtree: true }); } catch (e) {}
     ensure();
     setInterval(ensure, 2000);
   }

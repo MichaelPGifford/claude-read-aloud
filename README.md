@@ -150,6 +150,10 @@ end up reaching for:
   never another tab's and never a transcript from somewhere else. Highlight
   text first and it reads *that*, cutting off whatever was playing: a new
   reading always replaces the old, because two at once are unlistenable.
+- **A speaker on every reply.** Hover any of Claude's text replies and a small
+  speaker appears at its start, where the timeline dot sits. Click it to hear
+  that message, from anywhere in the scrollback; click again to stop. Tool
+  calls don't get one.
 - **Highlight any text in the chat → right-click → "Read aloud"** in the same
   menu as copy/paste.
 
