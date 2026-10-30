@@ -71,7 +71,7 @@ one plays, so there are no gaps.
 | --- | --- | --- |
 | `system` *(default)* | free | none — uses macOS `say`, Linux speech-dispatcher, or Windows SAPI |
 | `kokoro` | free | **`/read-aloud:voice-setup`** — local neural voice, 54 voices, no account (one-time ~340MB download) |
-| `speechify` | ~$10 / 1M chars | `export SPEECHIFY_API_KEY=…` |
+| `speechify` | ~$10–20 / 1M chars | `export SPEECHIFY_API_KEY=…` |
 | `elevenlabs` | from ~$5/mo | `export ELEVENLABS_API_KEY=…` |
 | `openai` | ~$15 / 1M chars | `export OPENAI_API_KEY=…` |
 | `command` | free | any local engine ([Piper], [Kokoro], …) via a command template |
@@ -91,6 +91,19 @@ Config lives at `~/.config/claude-read-aloud/config.json`
 `voice` is the provider's own voice name/id (macOS: `say -v '?'` lists yours;
 cloud providers list voices in their consoles). API keys go in environment
 variables, never in the file.
+
+Speechify reads with Simba 3.5, the model it recommends: 48 languages under
+one id, and every voice in the catalogue works on it. It bills at the Simba
+3.0 rate ($10 / 1M characters on Starter) until 21 November 2026 and $20
+after. `model` picks a different one, `simba-3.0` or `simba-3.2`:
+
+```json
+{
+  "provider": "speechify",
+  "voice": "oliver",
+  "model": "simba-3.0"
+}
+```
 
 A local neural engine plugs in through `command` — `{text}` is replaced with
 the text to speak; add `{out}` if your engine writes a WAV for the plugin to

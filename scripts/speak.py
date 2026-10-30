@@ -90,10 +90,20 @@ DEFAULTS = {
     "max_chars": 12000,     # hard cap; ~14 minutes of speech
     "chunk_chars": 1800,    # per-request size, under every provider's limit
     "first_chars": 260,     # first chunk is tiny: its size is the latency
-    "model": "",            # openai only; default tts-1
+    "model": "",            # openai: default tts-1; speechify: simba-3.5
     "command": "",          # custom engine: template with {text} and/or {out}
     "api_keys": {},         # optional; env vars take precedence
 }
+
+# Speechify's recommended model: 48 languages under one id, and every voice in
+# the catalogue works on it, cloned ones included. Left unset, the API still
+# serves simba-3.0 (six languages); simba-3.2 is English only.
+SPEECHIFY_MODEL = "simba-3.5"
+# Without this header a request runs at whatever API version the workspace is
+# pinned to, and the shape of /v1/voices depends on it: older pins return a
+# bare list, newer ones the paged {voices, has_more, next_cursor}. Pinning
+# here means one shape for every account.
+SPEECHIFY_HEADERS = {"Speechify-Version": "2026-09-30"}
 
 
 def load_config() -> dict:
@@ -317,10 +327,11 @@ def make_synth(cfg: dict):
 
         def synth(text: str, out: pathlib.Path) -> None:
             raw = http_json(
-                "https://api.sws.speechify.com/v1/audio/speech",
+                "https://api.speechify.ai/v1/audio/speech",
                 {"input": text, "voice_id": cfg["voice"] or "oliver",
+                 "model": cfg["model"] or SPEECHIFY_MODEL,
                  "audio_format": "wav"},
-                {"Authorization": f"Bearer {key}"})
+                {"Authorization": f"Bearer {key}", **SPEECHIFY_HEADERS})
             audio = base64.b64decode(json.loads(raw)["audio_data"])
             out.write_bytes(fix_riff_sizes(audio))
         return synth
@@ -710,9 +721,10 @@ def list_voices(cfg: dict) -> int:
         cursor, pages = "", 0
         while pages < 12:
             pages += 1
-            url = ("https://api.sws.speechify.com/v1/voices?limit=100"
+            url = ("https://api.speechify.ai/v1/voices?limit=100"
                    + (f"&cursor={cursor}" if cursor else ""))
-            req = urllib.request.Request(url, headers={"Authorization": f"Bearer {key}"})
+            req = urllib.request.Request(
+                url, headers={"Authorization": f"Bearer {key}", **SPEECHIFY_HEADERS})
             with urllib.request.urlopen(req, timeout=60) as r:
                 page = json.loads(r.read())
             for v in page.get("voices", []):
@@ -776,6 +788,9 @@ def show_status(cfg: dict) -> None:
     print(f"config    : {config_path()}")
     print(f"provider  : {cfg['provider']}"
           + (f"  (voice: {cfg['voice']})" if cfg["voice"] else "  (default voice)"))
+    model = cfg["model"] or (SPEECHIFY_MODEL if cfg["provider"] == "speechify" else "")
+    if model:
+        print(f"model     : {model}")
     print(f"speed     : {cfg['speed']}")
     print(f"auto_read : {'on — every reply is spoken' if cfg['auto_read'] else 'off'}")
     print(f"api keys  : " + "  ".join(f"{p}:{s}" for p, s in keys.items()))
@@ -835,11 +850,13 @@ def main() -> int:
         if args.set_provider != cfg["provider"]:
             # A voice id belongs to ONE provider — keeping the old one hands
             # e.g. Kokoro a Speechify id and every reading errors. Reset to
-            # empty; each provider has a good built-in default.
+            # empty; each provider has a good built-in default. Same for the
+            # model: Speechify rejects an OpenAI model name, and vice versa.
             cfg["voice"] = ""
+            cfg["model"] = ""
         cfg["provider"] = args.set_provider
         save_config(cfg)
-        print(f"provider set to {args.set_provider} (voice: default)")
+        print(f"provider set to {args.set_provider} (voice and model: default)")
         return 0
     if args.set_speed is not None:
         cfg["speed"] = max(0.5, min(2.0, args.set_speed))
