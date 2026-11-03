@@ -281,6 +281,32 @@ def quiet_win() -> dict:
     return {"creationflags": CREATE_NO_WINDOW} if IS_WIN else {}
 
 
+PLAYER_GRACE_S = 5     # slack past a clip's length before its player counts as hung
+
+
+def clip_seconds(wav: pathlib.Path) -> float | None:
+    """Length of a WAV in seconds, or None when it can't be read as one."""
+    try:
+        with wave.open(str(wav)) as w:
+            return w.getnframes() / w.getframerate()
+    except (OSError, EOFError, wave.Error, ZeroDivisionError):
+        return None
+
+
+def wait_player(player: subprocess.Popen, wav: pathlib.Path) -> None:
+    """Wait for a chunk's player, but not on one that hangs after the audio.
+
+    Chunk i+1 starts only when chunk i's player exits, so a player that never
+    exits silences the rest of the reading after its first chunk.
+    """
+    secs = clip_seconds(wav)
+    try:
+        player.wait(timeout=None if secs is None else secs + PLAYER_GRACE_S)
+    except subprocess.TimeoutExpired:
+        player.kill()
+        player.wait()
+
+
 def player_cmd(wav: pathlib.Path) -> list[str]:
     if IS_MAC:
         return ["afplay", str(wav)]
@@ -288,9 +314,11 @@ def player_cmd(wav: pathlib.Path) -> list[str]:
         path = str(wav).replace("'", "''")
         return ["powershell", "-NoProfile", "-Command",
                 f"(New-Object Media.SoundPlayer '{path}').PlaySync()"]
-    p = _which("aplay", "paplay", "ffplay")
+    # aplay goes last. Through PipeWire's ALSA layer (Fedora, recent Ubuntu)
+    # it can hang forever once the audio has played, ignoring SIGTERM.
+    p = _which("pw-play", "paplay", "ffplay", "aplay")
     if not p:
-        sys.exit("no audio player found (need aplay, paplay, or ffplay)")
+        sys.exit("no audio player found (need pw-play, paplay, ffplay, or aplay)")
     if p == "ffplay":
         return ["ffplay", "-nodisp", "-autoexit", "-loglevel", "quiet", str(wav)]
     return [p, "-q", str(wav)] if p == "aplay" else [p, str(wav)]
@@ -576,7 +604,7 @@ def release() -> None:
 
 def _on_term(_sig=None, _frm=None):
     if _player and _player.poll() is None:
-        _player.terminate()
+        _player.kill()                           # a hung aplay ignores SIGTERM
     if _kokoro_runner and _kokoro_runner.poll() is None:
         _kokoro_runner.terminate()
     release()
@@ -611,7 +639,7 @@ def play_chunked(text: str, cfg: dict, synth) -> None:
             prefetch = threading.Thread(
                 target=synth, args=(chunks[i + 1], PARTS[(i + 1) % 2]), daemon=True)
             prefetch.start()
-        _player.wait()
+        wait_player(_player, cur)
         if prefetch:
             prefetch.join()
     release()
